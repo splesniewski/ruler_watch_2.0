@@ -31,40 +31,40 @@ Window *window;
 Layer *rootLayer;
 Layer *rulerLayer; // The board/grid
 Layer *lineLayer; // The board/grid
-Layer *bgLayer;   // the bakcground
+Layer *bgLayer;   // the background
 
 TextLayer *hourLayers[30];
 char hourStrings[30][13];
 
-int hour = 9;
-int min  = 37;
-
-
-//currently seems to blow up on either line
-void set_hour_string(int i, int _hour) {
-  // convert to 12h format if that's what the phone is set to
-  if (!clock_is_24h_style()) {
-    _hour = (_hour % 12);
-    if (_hour == 0) _hour = 12;
-  }
-    
-  snprintf(hourStrings[i], 12, "%d", _hour);
-  text_layer_set_text(hourLayers[i], hourStrings[i]);
-}
-
 void init_hours() {
-	static char *x = "x";
-	int i;
-	
 	GFont font = fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD);
-	for (i = 0; i < 30; i++) {
+	for (int _hour = 0; _hour < 30; _hour++) {
+	        int display_hour;
+
 		// 12 gradients per hour, subtract 5 to make the number roughly in the middle of the line
-		hourLayers[i] = text_layer_create(GRect(70, (i * (12 * GRADIENT)) - 15 ,40,30));
-		text_layer_set_font(hourLayers[i], font);
-		text_layer_set_background_color(hourLayers[i], GColorClear);
-		text_layer_set_text_color(hourLayers[i], COLOR_FOREGROUND);
-		text_layer_set_text(hourLayers[i], x);
-		layer_add_child(rulerLayer, text_layer_get_layer(hourLayers[i]));
+		hourLayers[_hour] = text_layer_create(GRect(70, (_hour * (12 * GRADIENT)) - 15 ,40,30));
+		text_layer_set_font(hourLayers[_hour], font);
+		text_layer_set_background_color(hourLayers[_hour], GColorClear);
+		text_layer_set_text_color(hourLayers[_hour], COLOR_FOREGROUND);
+
+		// we are displaying a rolling frame of 29 odd hour markers (to make sure
+		// we have extra numbers at the start and end to facillate rollinng around
+		// as we are displaying this two hours backwards (to make the time marker
+		// in the centre of the screen, we need to adjust the hour - make sure
+		// it's less than 24, and make sure it's greeater than one
+		// it doesn't display as -1 or -2, or 27 o'clock
+		display_hour = (_hour - 2) % 24;
+		if (display_hour < 0) display_hour = display_hour + 24;
+			
+		// convert to 12h format if that's what the phone is set to
+		if (!clock_is_24h_style()) {
+		  display_hour = (display_hour % 12);
+		  if (display_hour == 0) _hour = 12;
+		}
+		snprintf(hourStrings[_hour], 12, "%d", display_hour);
+		text_layer_set_text(hourLayers[_hour], hourStrings[_hour]);
+
+		layer_add_child(rulerLayer, text_layer_get_layer(hourLayers[_hour]));
 	}
 }
 
@@ -111,13 +111,12 @@ void bgLayer_update_callback(Layer *layer, GContext* ctx) {
 void drawRuler(GContext *ctx) {
 	int x = 0;
 	int y = 0;
-	int display_hour;
 	
 	graphics_context_set_stroke_color(ctx, COLOR_FOREGROUND);
+
 	// draw 29 hours worth of lines as we need to be able to have 23.59 get to the top of the screen
 	// whilst still having the next few hours beneath it. (so hours 0-3 are duplicated)
-	//for (int _hour = 0; _hour <= 5; _hour++, hour_layer_counter++ ) {
-	for (int _hour = 0 ; _hour < 29 ; _hour++ ) {
+	for (int _hour = 0 ; _hour < 30 ; _hour++ ) {
 		for (int _min = 0; _min < 59; _min= _min + 5 ) {
 			y = y + GRADIENT;
 			if  (_min  == 0)  {
@@ -131,36 +130,28 @@ void drawRuler(GContext *ctx) {
 			}
 			
 			graphics_draw_line(ctx, GPoint(19, y), GPoint(x, y));
-			
-			
-			// we are displaying a rolling frame of 29 odd hour markers (to make sure
-			// we have extra numbers at the start and end to facillate rollinng around
-			// as we are displaying this two hours backwards (to make the time marker
-			// in the centre of the screen, we need to adjust the hour - make sure
-			// it's less than 24, and make sure it's greeater than one
-			// it doesn't display as -1 or -2, or 27 o'clock
-			display_hour = (_hour - 2) % 24;
-			if (display_hour < 0) display_hour = display_hour + 24;
-			
-			set_hour_string(_hour, display_hour);
 		}
 	}
 }
 
 
-void rulerLayer_update_callback (Layer *me, GContext* ctx) {
-	int total_mins = ( (hour * 60) + min);
-	int offset = ((total_mins / 5) * GRADIENT * - 1) - FUDGE ;
+void rulerLayer_move_current_offset () {
+	time_t t;
+	struct tm *now;
 
-	//layer_set_frame(&rulerLayer, GRect(0, offset ,144  ,148));
-	//set the frame to be the area on the screen that we want the 
-	//ruler lines  to be visible in (this has clipping off so we wont see
-	//anything outside this box)
-	layer_set_frame(rulerLayer, GRect(5, 5 ,144-20  ,168-10));
+	t = time(NULL);
+	now = localtime(&t);
+
+	int total_mins = ((now->tm_hour * 60) + now->tm_min);
+	int offset = ((total_mins / 5) * GRADIENT * -1) - FUDGE ;
+
 	// offset the bounds of the layer by the length needed to show the current 
 	// time
 	layer_set_bounds(rulerLayer, GRect(0, offset ,100 ,100));
+}
 
+void rulerLayer_update_callback (Layer *me, GContext* ctx) {
+        rulerLayer_move_current_offset();
 	drawRuler(ctx);
 }
 
@@ -182,6 +173,15 @@ void init_bg_layer() {
 void init_ruler_layer() {
 	rulerLayer = layer_create(layer_get_frame(rootLayer)); // Associate with layer object and set dimensions
 	layer_set_update_proc(rulerLayer, rulerLayer_update_callback); // Set the drawing callback function for the layer.
+
+	//layer_set_frame(&rulerLayer, GRect(0, offset ,144  ,148));
+	//set the frame to be the area on the screen that we want the 
+	//ruler lines to be visible in (this has clipping off so we wont see
+	//anything outside this box)
+	layer_set_frame(rulerLayer, GRect(5, 5 ,144-20  ,168-10));
+
+        rulerLayer_move_current_offset();
+
 	layer_add_child(rootLayer, rulerLayer); // Add the child to the app's base window
 }
 
@@ -194,10 +194,7 @@ void deinit_layers() {
 
 // once a minute update position of the ruler on the screen
 void handle_tick(struct tm *now, TimeUnits units_changed) {
-    hour = now->tm_hour;
-    min = now->tm_min;
-	
-	if (PULSE_MODE && min == 0) {
+	if (PULSE_MODE && now->tm_min == 0) {
 		vibes_short_pulse();
 	}
 
@@ -206,9 +203,6 @@ void handle_tick(struct tm *now, TimeUnits units_changed) {
 
 
 void handle_init() {
-	time_t t;
-	struct tm *now;
-	
 	window = window_create();
 	window_set_background_color(window, COLOR_BACKGROUND);
 	window_stack_push(window, true);
@@ -219,11 +213,6 @@ void handle_init() {
 	init_bg_layer();
 	init_ruler_layer();
 	init_hours();
-
-	t = time(NULL);
-	now = localtime(&t);
-	hour = now->tm_hour;
-	min = now->tm_min;
 
 	tick_timer_service_subscribe(MINUTE_UNIT, handle_tick);
 }
