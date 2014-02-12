@@ -1,18 +1,6 @@
 #include <pebble.h>
 
-#define INVERT_COLORS  0
-
-#ifndef INVERT_COLORS
-#define INVERT_COLORS  1
-#define COLOR_FOREGROUND GColorWhite
-#define COLOR_BACKGROUND GColorBlack
-#else
-#define COLOR_FOREGROUND GColorBlack
-#define COLOR_BACKGROUND GColorWhite
-#endif
-
-#define DEBUG_MODE 0
-#define PULSE_MODE 1
+//#define DEBUG_MODE
 
 #define LINE_LEVEL 80 // height of marker live.
 #define GRADIENT 4 // distance each 5 min line apart
@@ -24,8 +12,10 @@
 //#define GRADIENT 3 // distance each 5 min line apart
 //#define FUDGE      0
 
-
-
+enum {
+	CONFIG_KEY_INVERT	= 1010,
+	CONFIG_KEY_VIBRATION	= 1011
+};
 
 Window *window;
 Layer *rootLayer;
@@ -36,6 +26,34 @@ Layer *bgLayer;   // the background
 TextLayer *hourLayers[30];
 char hourStrings[30][13];
 
+int hour = 9;
+int min  = 37;
+
+static int invert = false;
+static int vibration = false;
+static GColor COLOR_FOREGROUND = GColorBlack;
+static GColor COLOR_BACKGROUND = GColorWhite;
+
+
+//currently seems to blow up on either line
+void set_hour_string(int i, int _hour) {
+  // convert to 12h format if that's what the phone is set to
+  if (!clock_is_24h_style()) {
+    _hour = (_hour % 12);
+    if (_hour == 0) _hour = 12;
+  }
+    
+  snprintf(hourStrings[i], 12, "%d", _hour);
+  text_layer_set_text(hourLayers[i], hourStrings[i]);
+}
+
+void set_hour_color() {
+	int i;
+	for (i = 0; i < 30; i++) {
+		text_layer_set_text_color(hourLayers[i], COLOR_FOREGROUND);
+	}
+}
+	
 void init_hours() {
 	GFont font = fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD);
 	for (int _hour = 0; _hour < 30; _hour++) {
@@ -91,15 +109,15 @@ void bgLayer_update_callback(Layer *layer, GContext* ctx) {
 	int y = LINE_LEVEL; // position of marker line
 						// when inverting, we don't want the inset color, as otherwise it would be
 						// black (plastic), white (screen), black (screen). Just make it all black
-	if (INVERT_COLORS) {
-		graphics_context_set_fill_color(ctx, COLOR_BACKGROUND);
-	} else {
-		graphics_context_set_fill_color(ctx, COLOR_FOREGROUND);
+	if (!invert) {
 		//graphics_fill_rect(ctx, GRect(0,0,144, 168), 0, GCornersAll);
+		graphics_context_set_fill_color(ctx, COLOR_FOREGROUND);
 		graphics_fill_rect(ctx, layer_get_bounds(layer), 0, GCornersAll);
-		graphics_context_set_fill_color(ctx, GColorClear);
+		graphics_context_set_fill_color(ctx, COLOR_BACKGROUND);
 		graphics_fill_rect(ctx, GRect(5,5,144 - 10, 168 - 10) , 4, GCornersAll);
-		
+	} else {
+		graphics_context_set_fill_color(ctx, COLOR_BACKGROUND);
+		graphics_fill_rect(ctx, layer_get_bounds(layer), 0, GCornersAll);
 	}
 	
 	// draw the time marker line
@@ -157,7 +175,7 @@ void rulerLayer_update_callback (Layer *me, GContext* ctx) {
 
 void init_line_layer() {
 	lineLayer = layer_create(layer_get_frame(rootLayer)); // Associate with layer object and set dimensions
-	if (!INVERT_COLORS) {
+	if (!invert) {
 		layer_set_update_proc(lineLayer, lineLayer_update_callback);
 	}
 	 // Set the drawing callback function for the layer.
@@ -194,15 +212,98 @@ void deinit_layers() {
 
 // once a minute update position of the ruler on the screen
 void handle_tick(struct tm *now, TimeUnits units_changed) {
-	if (PULSE_MODE && now->tm_min == 0) {
+	if (vibration && now->tm_min == 0) {
 		vibes_short_pulse();
 	}
 
 	layer_mark_dirty(rootLayer);
 }
 
+void setColors() {
+	if (invert) {
+		COLOR_BACKGROUND = GColorBlack;
+		COLOR_FOREGROUND = GColorWhite;
+	} else {
+		COLOR_BACKGROUND = GColorWhite;
+		COLOR_FOREGROUND = GColorBlack;
+	}
+}
+
+void applyConfig() {
+	setColors();
+	set_hour_color();
+	layer_mark_dirty(rootLayer);
+}
+
+void logVariables(const char *msg) {
+#ifdef DEBUG_MODE
+	APP_LOG(APP_LOG_LEVEL_DEBUG, "MSG: %s\n\tinvert=%d\n\tvibration=%d\n", msg, invert, vibration);
+#endif
+}
+
+bool checkAndSaveInt(int *var, int val, int key) {
+	if (*var != val) {
+		*var = val;
+		persist_write_int(key, val);
+		return true;
+	} else {
+		return false;
+	}
+}
+
+
+void in_dropped_handler(AppMessageResult reason, void *context) {
+#ifdef DEBUG_MODE
+	APP_LOG(APP_LOG_LEVEL_DEBUG, "in_dropped_handler reason = %d", (int)reason);
+#endif
+}
+
+void in_received_handler(DictionaryIterator *received, void *context) {
+	bool somethingChanged = false;
+
+	Tuple *invertTuple = dict_find(received, CONFIG_KEY_INVERT);
+	Tuple *vibrationTuple = dict_find(received, CONFIG_KEY_VIBRATION);
+	
+	if (invertTuple && vibrationTuple) {
+		somethingChanged |= checkAndSaveInt(&invert, invertTuple->value->int32, CONFIG_KEY_INVERT);
+		somethingChanged |= checkAndSaveInt(&vibration, vibrationTuple->value->int32, CONFIG_KEY_VIBRATION);
+		
+		logVariables("ReceiveHandler");
+		
+		if (somethingChanged) {
+			applyConfig();
+		}
+	}
+}
+
+void readConfig() {
+	if (persist_exists(CONFIG_KEY_INVERT)) {
+		invert = persist_read_int(CONFIG_KEY_INVERT);
+	} else {
+		invert = 0;
+	}
+	
+	if (persist_exists(CONFIG_KEY_VIBRATION)) {
+		vibration = persist_read_int(CONFIG_KEY_VIBRATION);
+	} else {
+		vibration = 0;
+	}
+	
+	logVariables("readConfig");	
+}
+
+static void app_message_init(void) {
+	app_message_register_inbox_received(in_received_handler);
+	app_message_register_inbox_dropped(in_dropped_handler);
+	app_message_open(64, 64);
+}
 
 void handle_init() {
+	readConfig();
+	setColors();
+
+	app_message_init();
+
 	window = window_create();
 	window_set_background_color(window, COLOR_BACKGROUND);
 	window_stack_push(window, true);
