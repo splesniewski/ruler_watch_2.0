@@ -77,7 +77,7 @@ void init_hours() {
 		// convert to 12h format if that's what the phone is set to
 		if (!clock_is_24h_style()) {
 		  display_hour = (display_hour % 12);
-		  if (display_hour == 0) _hour = 12;
+		  if (display_hour == 0) display_hour = 12;
 		}
 		snprintf(hourStrings[_hour], 12, "%d", display_hour);
 		text_layer_set_text(hourLayers[_hour], hourStrings[_hour]);
